@@ -1,0 +1,10 @@
+# Bytecode and caches
+__pycache__/
+*.pyc
+
+# Local environment files
+.env
+
+# Output
+results/
+logs/
