@@ -50,17 +50,6 @@ class MeterPublisher:
             print(f"[METER] Failed to connect to RabbitMQ: {e}")
             raise
 
-    def close_rabbitmq(self) -> None:
-        try:
-            if self.channel:
-                self.channel.close()
-            if self.connection:
-                self.connection.close()
-            print("[METER] Closed RabbitMQ connection.")
-        except Exception as e:
-            print(f"[METER] Error closing RabbitMQ connection: {e}")
-            raise
-
     @staticmethod
     def generate_meter_value() -> float:
         return round(random.uniform(0.0, 10.0), 3)
@@ -99,7 +88,22 @@ class MeterPublisher:
             value = self.generate_meter_value()
             self.publish(timestamp, value)
             time.sleep(interval)
-        self.close_rabbitmq()
+        self.stop()
+
+    def stop(self):
+        if self.channel and self.channel.is_open:
+            try:
+                print("[METER] Stopping consuming...")
+                self.channel.close()
+            except Exception as e:
+                print(f"[METER] Error closing channel: {e}")
+        if self.connection and self.connection.is_open:
+            print("[METER] Closing connection...")
+            try:
+                self.connection.close()
+            except Exception as e:
+                print(f"[PV_SIM] Error closing connection: {e}")
+
 
 def setup_signal_handlers(stop_event: threading.Event) -> None:
     def handler(signum, frame):
