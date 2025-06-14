@@ -2,6 +2,8 @@ import time
 import threading
 import signal
 import random
+import pika
+import json
 from typing import Any, Dict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from config import load_config
@@ -28,15 +30,56 @@ class MeterPublisher:
     def __init__(self, config: Dict[str, Any], stop_event: threading.Event):
         self.config = config
         self.stop_event = stop_event
-        # TODO: Rabbit connection initialization
+        self.connection = None
+        self.channel = None
+        self.setup_rabbitmq()
 
-    def generate_meter_value(self) -> float:
+    def setup_rabbitmq(self) -> None:
+        try:
+            parameters = pika.ConnectionParameters(
+                host=self.config["RABBITMQ_HOST"],
+                port=self.config["RABBITMQ_PORT"],
+                heartbeat=600,
+                blocked_connection_timeout=300
+            )
+            self.connection = pika.BlockingConnection(parameters)
+            self.channel = self.connection.channel()
+            self.channel.queue_declare(queue=self.config["RABBITMQ_QUEUE"], durable=True)
+            print("[METER] Connected to RabbitMQ.")
+        except Exception as e:
+            print(f"[METER] Failed to connect to RabbitMQ: {e}")
+            raise
+
+    def close_rabbitmq(self) -> None:
+        try:
+            if self.channel:
+                self.channel.close()
+            if self.connection:
+                self.connection.close()
+            print("[METER] Closed RabbitMQ connection.")
+        except Exception as e:
+            print(f"[METER] Error closing RabbitMQ connection: {e}")
+            raise
+
+    @staticmethod
+    def generate_meter_value() -> float:
         return round(random.uniform(0.0, 10.0), 3)
 
     def publish(self, timestamp: float, value: float) -> None:
-        # For now, just print
-        print(f"[METER] {timestamp}: Meter={value} kW")
-        # TODO: Publish to Rabbit
+        message = {
+            "timestamp": timestamp,
+            "meter_value": value
+        }
+        try:
+            self.channel.basic_publish(
+                exchange='',
+                routing_key=self.config["RABBITMQ_QUEUE"],
+                body=json.dumps(message),
+                properties=pika.BasicProperties(delivery_mode=2)  # retain message
+            )
+            print(f"[METER] Published: {message}")
+        except Exception as e:
+            print(f"[METER] Failed to publish message: {e}")
 
     def run(self) -> None:
         interval = self.config["METER_INTERVAL"]
@@ -49,13 +92,14 @@ class MeterPublisher:
             now = time.time()
             elapsed = now - start_time
             if elapsed >= simulation_duration:
-                print("24 hours reached, shutting down gracefully.")
+                print("Simulation duration reached, shutting down gracefully.")
                 break
 
             timestamp = now
             value = self.generate_meter_value()
             self.publish(timestamp, value)
             time.sleep(interval)
+        self.close_rabbitmq()
 
 def setup_signal_handlers(stop_event: threading.Event) -> None:
     def handler(signum, frame):
