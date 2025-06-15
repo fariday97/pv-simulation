@@ -3,6 +3,13 @@ import signal
 import random
 import pika
 import json
+import math
+import time
+import os
+import csv
+import queue
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Dict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from config import load_config
@@ -24,11 +31,29 @@ def start_health_server(port: int) -> HTTPServer:
     return server
 
 class PVSimulator:
+    MAX_POWER = 3.2  # kW, estimated from profile in prompt
+    SUNRISE = 5.5 * 3600 # (5:30 AM), estimated from PV profile in prompt
+    SUNSET = 20.5 * 3600 # (8:30 PM), estimated from PV profile in prompt
+
+    @dataclass(frozen=True)
+    class Result:
+        iso_timestamp: str
+        meter_value: float
+        pv_value: float
+        total_power: float
+
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.connection = None
         self.channel = None
+        self.results_file = None
+        self.results_writer = None
         self.setup_rabbitmq()
+        self.open_csv_writer()
+        self.result_queue = queue.Queue()
+        self.writer_thread = threading.Thread(target=self.write, daemon=True)
+        self._running = True
+        self.writer_thread.start()
 
     def setup_rabbitmq(self) -> None:
         try:
@@ -46,30 +71,57 @@ class PVSimulator:
             print(f"[PV_SIM] Failed to connect to RabbitMQ: {e}")
             raise
 
-    def close_rabbitmq(self) -> None:
-        try:
-            if self.channel:
-                self.channel.close()
-            if self.connection:
-                self.connection.close()
-            print("[PV_SIM] Closed RabbitMQ connection.")
-        except Exception as e:
-            print(f"[PV_SIM] Error closing RabbitMQ connection: {e}")
+    def generate_pv_value(self, timestamp: float) -> float:
+        tm = time.localtime(timestamp)
+        seconds_since_midnight = tm.tm_hour * 3600 + tm.tm_min * 60 + tm.tm_sec
+        if seconds_since_midnight < self.SUNRISE or seconds_since_midnight > self.SUNSET:
+            return 0.0
+        t = (seconds_since_midnight - self.SUNRISE) / (self.SUNSET - self.SUNRISE) * math.pi
+        pv = self.MAX_POWER * math.sin(t) + random.uniform(-0.1, 0.1) # some noise for realism
+        return round(max(pv, 0.0), 3)
 
-    @staticmethod
-    def generate_pv_value(self) -> float:
-        # TODO: Generate based on real PV profile
-        return round(random.uniform(0.0, 10.0), 3)
+    def open_csv_writer(self):
+        path = self.config["RESULTS_PATH"]
+        try:
+            is_new = not os.path.exists(path)
+            self.results_file = open(path, mode='a', newline='', buffering=1)
+            self.results_writer = csv.writer(self.results_file)
+            if is_new:
+                self.results_writer.writerow(['iso_timestamp', 'meter_value', 'pv_value', 'total_power'])
+        except Exception as e:
+            print(f"[PV_SIM] Unable to open or write into disk file: {e}")
+
+    def write(self) -> None:
+        while self._running or not self.result_queue.empty():
+            try:
+                result = self.result_queue.get()
+                self.results_writer.writerow([
+                    result.iso_timestamp,
+                    result.meter_value,
+                    result.pv_value,
+                    result.total_power
+                ])
+                self.result_queue.task_done()
+            except Exception as e:
+                print(f"[PV_SIM] Error writing result: {e}")
 
     def handle_meter_message(self, ch, method, properties, body) -> None:
         try:
             meter_msg = json.loads(body)
-            pv_value = self.generate_pv_value()
-            print(f"[PV_SIM] Meter msg: {meter_msg}")
-            print(f"PV value: {pv_value} kW")
-            # TODO: File writing will be added in the next block
+            timestamp = meter_msg["timestamp"]
+            meter_value = meter_msg["meter_value"]
+            pv_value = self.generate_pv_value(timestamp)
+            print(f"[PV_SIM] Meter value: {meter_value}")
+            print(f"[PV_SIM] PV value: {pv_value} kW")
+            result = self.Result(
+                iso_timestamp=datetime.fromtimestamp(timestamp).isoformat(),
+                meter_value=meter_value,
+                pv_value=pv_value,
+                total_power=meter_value - pv_value
+            )
+            self.result_queue.put(result)
         except Exception as e:
-            print(f"[PV_SIM] Failed to process message: {e}")
+            print(f"[PV_SIM] Failed to process meter message: {e}")
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
     def run(self) -> None:
@@ -86,6 +138,7 @@ class PVSimulator:
             self.stop()
 
     def stop(self):
+        self._running = False
         if self.channel and self.channel.is_open:
             try:
                 print("[PV_SIM] Stopping consuming...")
@@ -98,6 +151,13 @@ class PVSimulator:
                 self.connection.close()
             except Exception as e:
                 print(f"[PV_SIM] Error closing connection: {e}")
+        if self.writer_thread.is_alive():
+            self.writer_thread.join(timeout=2)
+        try:
+            if hasattr(self, "results_file"):
+                self.results_file.close()
+        except Exception as e:
+            print(f"[PV_SIM] Error closing file: {e}")
 
 def setup_signal_handlers(pv_simulator: PVSimulator) -> None:
     def handler(signum, frame):
