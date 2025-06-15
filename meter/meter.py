@@ -68,7 +68,7 @@ class MeterPublisher:
             )
             print(f"[METER] Published: {message}")
         except Exception as e:
-            print(f"[METER] Failed to publish message: {e}")
+            print(f"[METER] Failed to publish value at {timestamp=} : {e}")
 
     def run(self) -> None:
         interval = self.config["METER_INTERVAL"]
@@ -102,7 +102,7 @@ class MeterPublisher:
             try:
                 self.connection.close()
             except Exception as e:
-                print(f"[PV_SIM] Error closing connection: {e}")
+                print(f"[METER] Error closing connection: {e}")
 
 
 def setup_signal_handlers(stop_event: threading.Event) -> None:
