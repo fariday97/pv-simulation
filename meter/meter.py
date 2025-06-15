@@ -4,9 +4,18 @@ import signal
 import random
 import pika
 import json
+import os
+import logging
 from typing import Any, Dict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from config import load_config
+from logging_utils import setup_logging
+
+def get_log_level():
+    level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    return getattr(logging, level, logging.INFO)
+
+logger = setup_logging(log_level=get_log_level())
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
@@ -18,13 +27,12 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-
 def start_health_server(port: int) -> HTTPServer:
     server = HTTPServer(('', port), HealthHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    logger.info(f"Health server started on port {port}.")
     return server
-
 
 class MeterPublisher:
     def __init__(self, config: Dict[str, Any], stop_event: threading.Event):
@@ -44,10 +52,13 @@ class MeterPublisher:
             )
             self.connection = pika.BlockingConnection(parameters)
             self.channel = self.connection.channel()
-            self.channel.queue_declare(queue=self.config["RABBITMQ_QUEUE"], durable=True)
-            print("[METER] Connected to RabbitMQ.")
+            self.channel.queue_declare(
+                queue=self.config["RABBITMQ_QUEUE"],
+                durable=True
+            )
+            logger.info("Connected to RabbitMQ.")
         except Exception as e:
-            print(f"[METER] Failed to connect to RabbitMQ: {e}")
+            logger.error(f"Failed to connect to RabbitMQ: {e}")
             raise
 
     @staticmethod
@@ -64,24 +75,29 @@ class MeterPublisher:
                 exchange='',
                 routing_key=self.config["RABBITMQ_QUEUE"],
                 body=json.dumps(message),
-                properties=pika.BasicProperties(delivery_mode=2)  # retain message
+                properties=pika.BasicProperties(delivery_mode=2)# retain
+                # message
             )
-            print(f"[METER] Published: {message}")
+            logger.debug(f"Published: {message}")
         except Exception as e:
-            print(f"[METER] Failed to publish value at {timestamp=} : {e}")
+            logger.error(f"Failed to publish value at timestamp="
+                         f"{timestamp}: {e}")
 
     def run(self) -> None:
         interval = self.config["METER_INTERVAL"]
         simulation_duration = self.config["SIMULATION_DURATION"]
         start_time = time.time()
+        logger.info("Publisher started.")
         while True:
             if self.stop_event.is_set():
+                logger.info("Shutting down gracefully.")
                 break
 
             now = time.time()
             elapsed = now - start_time
             if elapsed >= simulation_duration:
-                print("Simulation duration reached, shutting down gracefully.")
+                logger.info(f"Simulation duration of {simulation_duration}"
+                            f"reached, shutting down gracefully.")
                 break
 
             timestamp = now
@@ -93,21 +109,20 @@ class MeterPublisher:
     def stop(self):
         if self.channel and self.channel.is_open:
             try:
-                print("[METER] Stopping consuming...")
+                logger.info("Stopping channel")
                 self.channel.close()
             except Exception as e:
-                print(f"[METER] Error closing channel: {e}")
+                logger.error(f"Error closing channel: {e}")
         if self.connection and self.connection.is_open:
-            print("[METER] Closing connection...")
+            logger.info("Closing connection")
             try:
                 self.connection.close()
             except Exception as e:
-                print(f"[METER] Error closing connection: {e}")
-
+                logger.error(f"Error closing connection: {e}")
 
 def setup_signal_handlers(stop_event: threading.Event) -> None:
     def handler(signum, frame):
-        print("[METER] Received shutdown signal.")
+        logger.info("Received shutdown signal.")
         stop_event.set()
     signal.signal(signal.SIGINT, handler)
     signal.signal(signal.SIGTERM, handler)
@@ -122,6 +137,7 @@ def main() -> None:
     publisher.run()
 
     health_server.shutdown()
+    logger.info("Health server shut down.")
 
 if __name__ == "__main__":
     main()

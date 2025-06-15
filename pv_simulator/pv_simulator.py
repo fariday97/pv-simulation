@@ -8,11 +8,19 @@ import time
 import os
 import csv
 import queue
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from config import load_config
+from logging_utils import setup_logging
+
+def get_log_level():
+    level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    return getattr(logging, level, logging.INFO)
+
+logger = setup_logging(log_level=get_log_level())
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -28,6 +36,7 @@ def start_health_server(port: int) -> HTTPServer:
     server = HTTPServer(('', port), HealthHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    logger.info(f"Health server started on port {port}.")
     return server
 
 class PVSimulator:
@@ -66,10 +75,10 @@ class PVSimulator:
             self.connection = pika.BlockingConnection(parameters)
             self.channel = self.connection.channel()
             self.channel.queue_declare(queue=self.config["RABBITMQ_QUEUE"], durable=True)
-            print("[PV_SIM] Connected to RabbitMQ.")
+            logger.info("Connected to RabbitMQ.")
         except Exception as e:
-            print(f"[PV_SIM] Failed to connect to RabbitMQ: {e}")
-            raise
+            logger.error(f"Failed to connect to RabbitMQ: {e}")
+            signal.raise_signal(signal.SIGINT)
 
     def generate_pv_value(self, timestamp: float) -> float:
         tm = time.localtime(timestamp)
@@ -88,8 +97,10 @@ class PVSimulator:
             self.results_writer = csv.writer(self.results_file)
             if is_new:
                 self.results_writer.writerow(['iso_timestamp', 'meter_value', 'pv_value', 'total_power'])
+            logger.info(f"CSV writer successfully activated.")
         except Exception as e:
-            print(f"[PV_SIM] Unable to open or write into disk file: {e}")
+            logger.error(f"Unable to open or write into CSV file: {e}")
+            signal.raise_signal(signal.SIGINT)
 
     def write(self) -> None:
         while self._running or not self.result_queue.empty():
@@ -102,8 +113,10 @@ class PVSimulator:
                     result.total_power
                 ])
                 self.result_queue.task_done()
+                logger.debug(f"Wrote result at {result.iso_timestamp} "
+                             f"successfully")
             except Exception as e:
-                print(f"[PV_SIM] Error writing result: {e}")
+                logger.error(f"Error writing result: {e}")
 
     def handle_meter_message(self, ch, method, properties, body) -> None:
         try:
@@ -111,8 +124,6 @@ class PVSimulator:
             timestamp = meter_msg["timestamp"]
             meter_value = meter_msg["meter_value"]
             pv_value = self.generate_pv_value(timestamp)
-            print(f"[PV_SIM] Meter value: {meter_value}")
-            print(f"[PV_SIM] PV value: {pv_value} kW")
             result = self.Result(
                 iso_timestamp=datetime.fromtimestamp(timestamp).isoformat(),
                 meter_value=meter_value,
@@ -120,8 +131,10 @@ class PVSimulator:
                 total_power=meter_value - pv_value
             )
             self.result_queue.put(result)
+            logger.debug(f"Result at {result.iso_timestamp} queued "
+                         f"successfully")
         except Exception as e:
-            print(f"[PV_SIM] Failed to process meter message: {e}")
+            logger.error(f"Failed to process meter message: {e}")
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
     def run(self) -> None:
@@ -129,11 +142,11 @@ class PVSimulator:
             queue=self.config["RABBITMQ_QUEUE"],
             on_message_callback=self.handle_meter_message
         )
-        print("[PV_SIM] Waiting for messages.")
+        logger.info("Ready to consume messages.")
         try:
             self.channel.start_consuming()
         except Exception as e:
-            print(f"[PV_SIM] Error in consuming: {e}")
+            logger.error(f"[PV_SIM] Error in consuming: {e}")
         finally:
             self.stop()
 
@@ -141,27 +154,28 @@ class PVSimulator:
         self._running = False
         if self.channel and self.channel.is_open:
             try:
-                print("[PV_SIM] Stopping consuming...")
+                logger.info("Stopping channel.")
                 self.channel.close()
             except Exception as e:
-                print(f"[PV_SIM] Error closing channel: {e}")
+                logger.error(f"Error closing channel: {e}")
         if self.connection and self.connection.is_open:
-            print("[PV_SIM] Closing connection...")
+            logger.info("Closing connection.")
             try:
                 self.connection.close()
             except Exception as e:
-                print(f"[PV_SIM] Error closing connection: {e}")
+                logger.error(f"Error closing connection: {e}")
         if self.writer_thread.is_alive():
             self.writer_thread.join(timeout=2)
         try:
             if hasattr(self, "results_file"):
                 self.results_file.close()
+                logger.info("CSV file closed.")
         except Exception as e:
-            print(f"[PV_SIM] Error closing file: {e}")
+            logger.error(f"Error closing file: {e}")
 
 def setup_signal_handlers(pv_simulator: PVSimulator) -> None:
     def handler(signum, frame):
-        print("[PV_SIM] Received shutdown signal.")
+        logger.info("Received shutdown signal.")
         pv_simulator.channel.stop_consuming()
     signal.signal(signal.SIGINT, handler)
     signal.signal(signal.SIGTERM, handler)
@@ -175,6 +189,7 @@ def main() -> None:
     pv_sim.run()
 
     health_server.shutdown()
+    logger.info("Health server shut down.")
 
 if __name__ == "__main__":
     main()
