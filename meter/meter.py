@@ -4,35 +4,14 @@ import signal
 import random
 import pika
 import json
-import os
+import sys
 import logging
-from typing import Any, Dict
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any, Dict, Optional
+from health_server import start_health_server
 from config import load_config
-from logging_utils import setup_logging
+from logging_utils import setup_logging, get_log_level
 
-def get_log_level():
-    level = os.environ.get("LOG_LEVEL", "INFO").upper()
-    return getattr(logging, level, logging.INFO)
-
-logger = setup_logging(log_level=get_log_level())
-
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:
-        if self.path == '/health':
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b'OK')
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-def start_health_server(port: int) -> HTTPServer:
-    server = HTTPServer(('', port), HealthHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    logger.info(f"Health server started on port {port}.")
-    return server
+logger: Optional[logging.Logger] = None
 
 class MeterPublisher:
     def __init__(self, config: Dict[str, Any], stop_event: threading.Event):
@@ -59,7 +38,7 @@ class MeterPublisher:
             logger.info("Connected to RabbitMQ.")
         except Exception as e:
             logger.error(f"Failed to connect to RabbitMQ: {e}")
-            raise
+            sys.exit(1)
 
     @staticmethod
     def generate_meter_value() -> float:
@@ -97,7 +76,7 @@ class MeterPublisher:
             elapsed = now - start_time
             if elapsed >= simulation_duration:
                 logger.info(f"Simulation duration of {simulation_duration}"
-                            f"reached, shutting down gracefully.")
+                            f" seconds reached, shutting down gracefully.")
                 break
 
             timestamp = now
@@ -128,10 +107,12 @@ def setup_signal_handlers(stop_event: threading.Event) -> None:
     signal.signal(signal.SIGTERM, handler)
 
 def main() -> None:
+    global logger
     config = load_config()
+    logger = setup_logging(log_level=get_log_level(config["LOG_LEVEL"]))
     stop_event = threading.Event()
     setup_signal_handlers(stop_event)
-    health_server = start_health_server(config["HEALTH_PORT"])
+    health_server = start_health_server(config["HEALTH_PORT"], logger)
 
     publisher = MeterPublisher(config, stop_event)
     publisher.run()
