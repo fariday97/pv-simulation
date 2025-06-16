@@ -1,24 +1,28 @@
 import time
-import threading
 import signal
 import random
 import pika
 import json
 import sys
-import logging
-from typing import Any, Dict, Optional
+from threading import Event
+from typing import Any, Dict, Optional, TYPE_CHECKING
 from health_server import start_health_server
 from config import load_config
 from logging_utils import setup_logging, get_log_level
 
-logger: Optional[logging.Logger] = None
+if TYPE_CHECKING:
+    from pika.adapters.blocking_connection import BlockingConnection, \
+    BlockingChannel
+    from logging import Logger
 
 class MeterPublisher:
-    def __init__(self, config: Dict[str, Any], stop_event: threading.Event):
+    def __init__(self, config: Dict[str, Any], stop_event: Event,
+                 logger: "Logger") -> None:
         self.config = config
         self.stop_event = stop_event
-        self.connection = None
-        self.channel = None
+        self.logger = logger
+        self.connection: Optional["BlockingConnection"] = None
+        self.channel: Optional["BlockingChannel"] = None
         self.setup_rabbitmq()
 
     def setup_rabbitmq(self) -> None:
@@ -29,15 +33,15 @@ class MeterPublisher:
                 heartbeat=600,
                 blocked_connection_timeout=300
             )
-            self.connection = pika.BlockingConnection(parameters)
+            self.connection: BlockingConnection = pika.BlockingConnection(parameters)
             self.channel = self.connection.channel()
             self.channel.queue_declare(
                 queue=self.config["RABBITMQ_QUEUE"],
                 durable=True
             )
-            logger.info("Connected to RabbitMQ.")
+            self.logger.info("Connected to RabbitMQ.")
         except Exception as e:
-            logger.error(f"Failed to connect to RabbitMQ: {e}")
+            self.logger.error(f"Failed to connect to RabbitMQ: {e}")
             sys.exit(1)
 
     @staticmethod
@@ -54,28 +58,27 @@ class MeterPublisher:
                 exchange='',
                 routing_key=self.config["RABBITMQ_QUEUE"],
                 body=json.dumps(message),
-                properties=pika.BasicProperties(delivery_mode=2)# retain
-                # message
+                properties=pika.BasicProperties(delivery_mode=2)
             )
-            logger.debug(f"Published: {message}")
+            self.logger.debug(f"Published: {message}")
         except Exception as e:
-            logger.error(f"Failed to publish value at timestamp="
+            self.logger.error(f"Failed to publish value at timestamp="
                          f"{timestamp}: {e}")
 
     def run(self) -> None:
         interval = self.config["METER_INTERVAL"]
         simulation_duration = self.config["SIMULATION_DURATION"]
         start_time = time.time()
-        logger.info("Publisher started.")
+        self.logger.info("Publisher started.")
         while True:
             if self.stop_event.is_set():
-                logger.info("Shutting down gracefully.")
+                self.logger.info("Shutting down gracefully.")
                 break
 
             now = time.time()
             elapsed = now - start_time
             if elapsed >= simulation_duration:
-                logger.info(f"Simulation duration of {simulation_duration}"
+                self.logger.info(f"Simulation duration of {simulation_duration}"
                             f" seconds reached, shutting down gracefully.")
                 break
 
@@ -85,21 +88,21 @@ class MeterPublisher:
             time.sleep(interval)
         self.stop()
 
-    def stop(self):
+    def stop(self) -> None:
         if self.channel and self.channel.is_open:
             try:
-                logger.info("Stopping channel")
+                self.logger.info("Stopping channel")
                 self.channel.close()
             except Exception as e:
-                logger.error(f"Error closing channel: {e}")
+                self.logger.error(f"Error closing channel: {e}")
         if self.connection and self.connection.is_open:
-            logger.info("Closing connection")
+            self.logger.info("Closing connection")
             try:
                 self.connection.close()
             except Exception as e:
-                logger.error(f"Error closing connection: {e}")
+                self.logger.error(f"Error closing connection: {e}")
 
-def setup_signal_handlers(stop_event: threading.Event) -> None:
+def setup_signal_handlers(stop_event: Event, logger: "Logger") -> None:
     def handler(signum, frame):
         logger.info("Received shutdown signal.")
         stop_event.set()
@@ -107,14 +110,14 @@ def setup_signal_handlers(stop_event: threading.Event) -> None:
     signal.signal(signal.SIGTERM, handler)
 
 def main() -> None:
-    global logger
     config = load_config()
     logger = setup_logging(log_level=get_log_level(config["LOG_LEVEL"]))
-    stop_event = threading.Event()
-    setup_signal_handlers(stop_event)
-    health_server = start_health_server(config["HEALTH_PORT"], logger)
+    stop_event = Event()
+    setup_signal_handlers(stop_event, logger)
+    health_server = start_health_server(config["HEALTH_PORT"])
+    logger.info(f"Health server started on port {config['HEALTH_PORT']}.")
 
-    publisher = MeterPublisher(config, stop_event)
+    publisher = MeterPublisher(config, stop_event, logger)
     publisher.run()
 
     health_server.shutdown()
