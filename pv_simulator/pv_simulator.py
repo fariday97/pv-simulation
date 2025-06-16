@@ -95,8 +95,11 @@ class PVSimulator:
                 ])
             self.logger.info(f"CSV writer successfully activated.")
         except Exception as e:
-            logger.error(f"Unable to open or write into CSV file: {e}")
-            signal.raise_signal(signal.SIGPIPE)
+            self.logger.error(f"Unable to open or write into CSV file: {e}")
+            self.health_server.shutdown()
+            self.health_server.is_up = False
+            self.logger.info("Health server shut down as no results are being "
+                        "logged into disk.")
 
     def write(self) -> None:
         while self._running or not self.result_queue.empty():
