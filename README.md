@@ -14,7 +14,7 @@ Before building or running the simulation stack, ensure you have:
 
 * **Docker** (version 20.10 or higher recommended)
 * **Docker Compose** (v2.x or higher, or included with Docker Desktop)
-* (Optional) **Git** (if cloning this repository)
+* (Optional) **Git** 
 
 ---
 
