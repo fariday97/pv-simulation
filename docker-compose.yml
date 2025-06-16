@@ -2,8 +2,8 @@ services:
   rabbitmq:
     image: rabbitmq:4-management
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "${RABBITMQ_PORT}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT}:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
       - ./logs:/var/log/rabbitmq
@@ -52,14 +52,13 @@ services:
     volumes:
       - ./results:/app/results
       - ./logs:/app/log
-      - /etc/localtime:/etc/localtime:ro
+      - /etc/localtime:/etc/localtime:ro # Ensure sync with clock host on linux systems, otherwise set timezone below (TZ)
     environment:
       - RABBITMQ_HOST=${RABBITMQ_HOST}
       - RABBITMQ_PORT=${RABBITMQ_PORT}
       - RABBITMQ_QUEUE=${RABBITMQ_QUEUE}
-      - METER_INTERVAL=${METER_INTERVAL}
-      - SIMULATION_DURATION=${SIMULATION_DURATION}
       - PV_SIM_HEALTH_PORT=${PV_SIM_HEALTH_PORT}
+      #- TZ=${TIMEZONE}
 
 volumes:
   rabbitmq_data:
