@@ -13,31 +13,50 @@ services:
       retries: 5
 
   meter:
-    build: ./meter
+    build:
+      context: .
+      dockerfile: meter/Dockerfile
     depends_on:
       rabbitmq:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "sh", "-c", "python healthcheck.py ${METER_HEALTH_PORT} > /dev/null 2>&1"]
       interval: 10s
       timeout: 3s
       retries: 3
     volumes:
-      - ./logs/meter:/log
+      - ./logs:/app/log
+    environment:
+      - RABBITMQ_HOST=${RABBITMQ_HOST}
+      - RABBITMQ_PORT=${RABBITMQ_PORT}
+      - RABBITMQ_QUEUE=${RABBITMQ_QUEUE}
+      - METER_INTERVAL=${METER_INTERVAL}
+      - SIMULATION_DURATION=${SIMULATION_DURATION}
+      - METER_HEALTH_PORT=${METER_HEALTH_PORT}
 
   pv_simulator:
-    build: ./pv_simulator
+    build:
+      context: .
+      dockerfile: pv_simulator/Dockerfile
     depends_on:
       rabbitmq:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8001/health" ]
+      test: ["CMD", "sh", "-c", "python healthcheck.py ${PV_SIM_HEALTH_PORT} > /dev/null 2>&1"]
       interval: 10s
       timeout: 3s
       retries: 3
     volumes:
-      - ./results:/results
-      - ./logs/pv_simulator:/log
+      - ./results:/app/results
+      - ./logs:/app/log
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - RABBITMQ_HOST=${RABBITMQ_HOST}
+      - RABBITMQ_PORT=${RABBITMQ_PORT}
+      - RABBITMQ_QUEUE=${RABBITMQ_QUEUE}
+      - METER_INTERVAL=${METER_INTERVAL}
+      - SIMULATION_DURATION=${SIMULATION_DURATION}
+      - PV_SIM_HEALTH_PORT=${PV_SIM_HEALTH_PORT}
 
 volumes:
   rabbitmq_data:
