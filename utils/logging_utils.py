@@ -3,6 +3,9 @@ import os
 import sys
 from typing import Optional
 
+def get_log_level(level: str) -> int:
+    return getattr(logging, level, logging.INFO)
+
 def setup_logging(
     log_level: int = logging.INFO,
     log_dir: Optional[str] = None,
