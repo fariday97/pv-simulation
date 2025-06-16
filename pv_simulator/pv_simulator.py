@@ -70,7 +70,10 @@ class PVSimulator:
         return round(max(pv, 0.0), 3)
 
     def open_csv_writer(self):
-        path = self.config["RESULTS_PATH"]
+        results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "results")
+        os.makedirs(results_dir, exist_ok=True)
+        path = os.path.join(results_dir, "simulation_results.csv")
         try:
             is_new = not os.path.exists(path)
             self.results_file = open(path, mode='a', newline='', buffering=1)
@@ -80,7 +83,7 @@ class PVSimulator:
             logger.info(f"CSV writer successfully activated.")
         except Exception as e:
             logger.error(f"Unable to open or write into CSV file: {e}")
-            signal.raise_signal(signal.SIGINT)
+            signal.raise_signal(signal.SIGPIPE)
 
     def write(self) -> None:
         while self._running or not self.result_queue.empty():
@@ -148,8 +151,8 @@ class PVSimulator:
                 logger.error(f"Error closing connection: {e}")
         if self.writer_thread.is_alive():
             self.writer_thread.join(timeout=2)
-        try:
-            if hasattr(self, "results_file"):
+        if self.results_file:
+            try:
                 self.results_file.close()
                 logger.info("CSV file closed.")
             except Exception as e:
@@ -159,6 +162,8 @@ def setup_signal_handlers(pv_simulator: PVSimulator) -> None:
     def handler(signum, frame):
         logger.info("Received shutdown signal.")
         pv_simulator.channel.stop_consuming()
+        if signum == signal.SIGPIPE:
+            sys.exit(1)
     signal.signal(signal.SIGINT, handler)
     signal.signal(signal.SIGTERM, handler)
 
