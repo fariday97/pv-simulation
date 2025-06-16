@@ -11,9 +11,12 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-def start_health_server(port: int, logger) -> HTTPServer:
+    def log_message(self, format, *args):
+        pass
+
+def start_health_server(port: int) -> HTTPServer:
     server = HTTPServer(('', port), HealthHandler)
+    server.is_up = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    logger.info(f"Health server started on port {port}.")
     return server

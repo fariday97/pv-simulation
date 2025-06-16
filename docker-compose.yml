@@ -6,11 +6,14 @@ services:
       - "15672:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      - ./logs:/var/log/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmqctl", "status"]
       interval: 10s
       timeout: 5s
       retries: 5
+    environment:
+      - RABBITMQ_LOGS=rabbit.log
 
   meter:
     build:
