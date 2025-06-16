@@ -1,3 +1,4 @@
+import logging
 import threading
 import signal
 import random
@@ -8,36 +9,15 @@ import time
 import os
 import csv
 import queue
-import logging
+import sys
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any, Dict, Optional
+from health_server import start_health_server
 from config import load_config
-from logging_utils import setup_logging
+from logging_utils import setup_logging, get_log_level
 
-def get_log_level():
-    level = os.environ.get("LOG_LEVEL", "INFO").upper()
-    return getattr(logging, level, logging.INFO)
-
-logger = setup_logging(log_level=get_log_level())
-
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == '/health':
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b'OK')
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-def start_health_server(port: int) -> HTTPServer:
-    server = HTTPServer(('', port), HealthHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    logger.info(f"Health server started on port {port}.")
-    return server
+logger: Optional[logging.Logger] = None
 
 class PVSimulator:
     MAX_POWER = 3.2  # kW, estimated from profile in prompt
@@ -78,7 +58,7 @@ class PVSimulator:
             logger.info("Connected to RabbitMQ.")
         except Exception as e:
             logger.error(f"Failed to connect to RabbitMQ: {e}")
-            signal.raise_signal(signal.SIGINT)
+            sys.exit(1)
 
     def generate_pv_value(self, timestamp: float) -> float:
         tm = time.localtime(timestamp)
@@ -124,11 +104,13 @@ class PVSimulator:
             timestamp = meter_msg["timestamp"]
             meter_value = meter_msg["meter_value"]
             pv_value = self.generate_pv_value(timestamp)
+            iso_timestamp = datetime.fromtimestamp(timestamp).isoformat(
+                    timespec="milliseconds")
             result = self.Result(
-                iso_timestamp=datetime.fromtimestamp(timestamp).isoformat(),
+                iso_timestamp=iso_timestamp,
                 meter_value=meter_value,
                 pv_value=pv_value,
-                total_power=meter_value - pv_value
+                total_power=round(meter_value - pv_value, 3)
             )
             self.result_queue.put(result)
             logger.debug(f"Result at {result.iso_timestamp} queued "
@@ -170,8 +152,8 @@ class PVSimulator:
             if hasattr(self, "results_file"):
                 self.results_file.close()
                 logger.info("CSV file closed.")
-        except Exception as e:
-            logger.error(f"Error closing file: {e}")
+            except Exception as e:
+                logger.error(f"Error closing file: {e}")
 
 def setup_signal_handlers(pv_simulator: PVSimulator) -> None:
     def handler(signum, frame):
@@ -181,8 +163,10 @@ def setup_signal_handlers(pv_simulator: PVSimulator) -> None:
     signal.signal(signal.SIGTERM, handler)
 
 def main() -> None:
+    global logger
     config = load_config()
-    health_server = start_health_server(config["HEALTH_PORT"])
+    logger = setup_logging(log_level=get_log_level(config["LOG_LEVEL"]))
+    health_server = start_health_server(config["HEALTH_PORT"], logger)
 
     pv_sim = PVSimulator(config)
     setup_signal_handlers(pv_sim)
