@@ -4,7 +4,7 @@
 
 ## Overview
 
-This project simulates a photovoltaic (PV) power system and a household consumption meter, using event-driven communication via RabbitMQ.
+This project simulates a photovoltaic (PV) power system (consumer) and a household consumption meter (publisher), using event-driven communication via RabbitMQ.
 **Outputs:** A timestamped CSV file containing meter readings, PV output, and total power.
 
 ---
