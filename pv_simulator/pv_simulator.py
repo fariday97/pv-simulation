@@ -91,7 +91,7 @@ class PVSimulator:
                     'ISO Timestamp',
                     'Meter Power (KW)',
                     'PV Power (KW)',
-                    'Total Power (KW)'
+                    'Sum of Powers (KW)'
                 ])
             self.logger.info(f"CSV writer successfully activated.")
         except Exception as e:

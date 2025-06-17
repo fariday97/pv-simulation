@@ -52,7 +52,7 @@ services:
     volumes:
       - ./results:/app/results
       - ./logs:/app/log
-      - /etc/localtime:/etc/localtime:ro # Ensure sync with clock host on linux systems, otherwise set timezone below (TZ)
+      - /etc/localtime:/etc/localtime:ro
     environment:
       - RABBITMQ_HOST=${RABBITMQ_HOST}
       - RABBITMQ_PORT=${RABBITMQ_PORT}

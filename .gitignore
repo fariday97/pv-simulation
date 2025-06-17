@@ -1,6 +1,7 @@
-# Bytecode and caches
+# Bytecode and caches and IDE files
 __pycache__/
 *.pyc
+.idea/
 
 # Local environment files
 .env
