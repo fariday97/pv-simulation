@@ -1,6 +1,6 @@
 
 
-# PV Simulator Coding Challenge
+# PV Simulator 
 
 ## Overview
 
